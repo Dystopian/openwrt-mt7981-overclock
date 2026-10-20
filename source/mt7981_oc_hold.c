@@ -282,7 +282,7 @@ static int __init probe_init(void)
     !mt7981_oc_request_allowed(target_mhz,allow_unsafe)) return -EPERM;
  if(target_mhz!=1300 && !mt7981_oc_calc_pcw(target_mhz,&ctx.target.wanted_pcw))
   return -ERANGE;
- if(!of_machine_is_compatible("cudy,wr3000s-v1-ubootmod")) return -ENODEV;
+ if(!of_machine_is_compatible("mediatek,mt7981")) return -ENODEV;
  if(!cpu_online(0) || num_online_cpus()!=2) return -EINVAL;
  thermal=thermal_zone_get_zone_by_name("cpu-thermal");
  if(IS_ERR(thermal)) return PTR_ERR(thermal);
