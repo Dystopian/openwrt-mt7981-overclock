@@ -1,0 +1,145 @@
+name: Build module
+
+on:
+  workflow_dispatch:
+    inputs:
+      openwrt_version:
+        description: 'OpenWrt release (25.12.5) or snapshot'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+
+      - name: Resolve official SDK
+        id: sdk
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.openwrt_version }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$INPUT_VERSION" == snapshot ]]; then
+            VERSION_KIND=snapshot
+            BASE_URL="https://downloads.openwrt.org/snapshots/targets/mediatek/filogic"
+            curl -fsSL "$BASE_URL/version.buildinfo" -o version.buildinfo
+            VERSION_LABEL="$(tr -d '\r\n' < version.buildinfo)"
+            PREFIX="openwrt-sdk-mediatek-filogic_"
+          elif [[ "$INPUT_VERSION" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+            VERSION_KIND=release
+            VERSION_LABEL="$INPUT_VERSION"
+            BASE_URL="https://downloads.openwrt.org/releases/$INPUT_VERSION/targets/mediatek/filogic"
+            PREFIX="openwrt-sdk-$INPUT_VERSION-mediatek-filogic_"
+          else
+            echo "Invalid version: $INPUT_VERSION"
+            echo "Use a release like 25.12.5 or snapshot"
+            exit 1
+          fi
+
+          curl -fsSL "$BASE_URL/" -o index.html
+          SDK_NAME="$(python3 - "$PREFIX" <<'PY'
+          import re, sys
+          from html.parser import HTMLParser
+
+          prefix = sys.argv[1]
+          class Links(HTMLParser):
+              def __init__(self):
+                  super().__init__()
+                  self.hrefs = []
+              def handle_starttag(self, tag, attrs):
+                  if tag == "a":
+                      self.hrefs += [v for k, v in attrs if k == "href"]
+
+          p = Links()
+          p.feed(open("index.html").read())
+          matches = sorted(
+              x for x in p.hrefs
+              if x.startswith(prefix)
+              and "Linux-x86_64" in x
+              and re.search(r"\.tar\.(zst|xz)$", x)
+          )
+          if not matches:
+              raise SystemExit("No matching official SDK found")
+          print(matches[-1])
+          PY
+          )"
+
+          CACHE_KEY="$(printf '%s' "$VERSION_LABEL" |
+              tr '[:upper:]' '[:lower:]' |
+              sed 's/[^a-z0-9._-]/-/g')"
+          echo "cache_key=$CACHE_KEY" >> "$GITHUB_OUTPUT"
+
+          echo "url=$BASE_URL/$SDK_NAME" >> "$GITHUB_OUTPUT"
+          echo "label=$VERSION_LABEL" >> "$GITHUB_OUTPUT"
+          echo "kind=$VERSION_KIND" >> "$GITHUB_OUTPUT"
+
+      - name: Restore SDK cache
+        id: sdk-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .cache/openwrt-sdk.tar
+          key: ${{ runner.os }}-openwrt-sdk-${{ steps.sdk.outputs.cache_key }}
+
+      - name: Download SDK archive
+        env:
+          SDK_URL: ${{ steps.sdk.outputs.url }}
+        run: |
+          set -euo pipefail
+          mkdir -p .cache
+          if [ ! -s .cache/openwrt-sdk.tar ]; then
+            curl -fL "$SDK_URL" -o .cache/openwrt-sdk.tar
+          else
+            echo "Using cached SDK archive"
+          fi
+
+      - name: Save SDK cache
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .cache/openwrt-sdk.tar
+          key: ${{ runner.os }}-openwrt-sdk-${{ steps.sdk.outputs.cache_key }}
+
+      - name: Extract SDK
+        run: |
+          set -euo pipefail
+          mkdir -p sdk
+          tar -xaf .cache/openwrt-sdk.tar -C sdk --strip-components=1
+
+      - name: Build module
+        run: |
+          set -euo pipefail
+          mkdir out
+          SDK_DIR="$GITHUB_WORKSPACE/sdk"
+          sh source/build.sh "$GITHUB_WORKSPACE/source" "$GITHUB_WORKSPACE/out" "$SDK_DIR"
+          test -s out/mt7981_oc_hold.ko
+
+      - name: Create archive
+        id: archive
+        run: |
+          set -euo pipefail
+          ARCHIVE="mt7981_oc_hold.tar.gz"
+          cp oc.sh out/oc.sh
+          tar -czf "$ARCHIVE" -C out mt7981_oc_hold.ko oc.sh
+          echo "path=$ARCHIVE" >> "$GITHUB_OUTPUT"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION_LABEL: ${{ steps.sdk.outputs.label }}
+          VERSION_KIND: ${{ steps.sdk.outputs.kind }}
+          ARCHIVE: ${{ steps.archive.outputs.path }}
+        run: |
+          set -euo pipefail
+          VERSION=$(cat VERSION)
+          TAG="${VERSION}-${VERSION_LABEL//[^a-zA-Z0-9.-]/-}"
+          [ "$VERSION_KIND" = "snapshot" ] && PRE="--prerelease" || PRE=""
+          gh release create "$TAG" "$ARCHIVE" $PRE \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$VERSION - OpenWrt $VERSION_LABEL"

@@ -7,11 +7,10 @@ BASE=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
 KO="$BASE/mt7981_oc_hold.ko"
 MODULE=mt7981_oc_hold
 STATE=/sys/module/mt7981_oc_hold/parameters/state
-OWNER=/tmp/wr3000s-oc-cli.owner
+OWNER=/tmp/mt7981-oc-cli.owner
 # Same lock as the separate panel tool, to refuse concurrent transitions.
 LOCK=/tmp/mt7981-oc-control.lock
-SHA=87b319aa86427a68f900e5b87683952cf51782c9a18215f25141d55f28b61a24
-EXPECTED_KERNEL_PACKAGE=6.12.94~5a6c1f71be683ae9980b15d3ce73e24d-r1
+SHA=$(sha256sum "$KO" | awk '{print $1}')
 locked=0
 new_load=0
 
@@ -34,21 +33,14 @@ platform_check() {
   command -v "$cmd" >/dev/null || die "Missing required command: $cmd. Nothing installed."
  done
  test -f /tmp/sysinfo/board_name || die 'OpenWrt board identity is missing.'
- test "$(cat /tmp/sysinfo/board_name)" = cudy,wr3000s-v1-ubootmod || die 'Only WR3000S v1 ubootmod is supported.'
  test "$(uname -m)" = aarch64 || die 'Wrong architecture.'
- test "$(uname -r)" = 6.12.94 || die 'Only kernel 6.12.94 is supported.'
- test "$(uname -v)" = '#0 SMP Mon Jun 29 12:59:20 2026' || die 'Different kernel build timestamp. Refusing.'
  test -r /etc/openwrt_release || die 'OpenWrt release identity is missing.'
  # This is the existing trusted OS release file, never package-provided code.
  # shellcheck disable=SC1091
  . /etc/openwrt_release
- test "${DISTRIB_RELEASE:-}" = 25.12.5 || die 'Only OpenWrt 25.12.5 is supported.'
- test "${DISTRIB_REVISION:-}" = r33051-f5dae5ece4 || die 'Different firmware revision.'
  test "${DISTRIB_TARGET:-}" = mediatek/filogic || die 'Different target.'
- apk info -e "kernel=$EXPECTED_KERNEL_PACKAGE" >/dev/null 2>&1 || die 'Different or unidentifiable kernel package ABI.'
  test "$(cat /sys/devices/system/cpu/online)" = 0-1 || die 'Exactly two online CPUs are required.'
  test -f "$KO" || die 'Put oc.sh and mt7981_oc_hold.ko in the same extracted directory.'
- test "$(sha256sum "$KO" | awk '{print $1}')" = "$SHA" || die 'Module checksum mismatch.'
 }
 status() {
  if [ -r "$STATE" ];then
