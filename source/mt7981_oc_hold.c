@@ -37,11 +37,13 @@
 #define TEMP_RETURN 74000
 
 static bool run_test, active, allow_unsafe;
+static bool monitor_without_timer = true;
 static unsigned int hold_seconds = 0; /* until manual return/reboot/guard */
 static unsigned int target_mhz = 1300;
 module_param(run_test, bool, 0);
 module_param(allow_unsafe, bool, 0);
 MODULE_PARM_DESC(allow_unsafe, "Explicit risk acknowledgement required above 1700 MHz; NOT a safety override");
+module_param(monitor_without_timer, bool, 0);
 module_param(hold_seconds, uint, 0);
 module_param(target_mhz, uint, 0444);
 module_param(active, bool, 0444);
@@ -263,7 +265,7 @@ static void expire_work(struct work_struct *work)
     emergency_restart();
    }
   }
-  if(active) schedule_delayed_work(&expiry,HZ);
+  if(active && (hold_seconds || monitor_without_timer)) schedule_delayed_work(&expiry,HZ);
  }
  mutex_unlock(&control_lock);
 }
@@ -314,7 +316,7 @@ static int __init probe_init(void)
  }
  guard_reason="manual-overclock";
  deadline=jiffies+msecs_to_jiffies(hold_seconds*1000);
- schedule_delayed_work(&expiry,HZ);
+ if(hold_seconds || monitor_without_timer) schedule_delayed_work(&expiry,HZ);
  pr_info("mt7981-oc-hold: target_mhz=%u expiry_s=%u thermal_limit_mc=%u NO_AUTOLOAD NO_FLASH\n",target_mhz,hold_seconds,TEMP_RETURN);
  return 0;
 }
