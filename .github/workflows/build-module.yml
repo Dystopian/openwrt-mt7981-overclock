@@ -7,6 +7,11 @@ on:
         description: 'OpenWrt release (25.12.5) or snapshot'
         required: true
         type: string
+      release:
+        description: 'Publish GitHub Release'
+        type: boolean
+        required: true
+        default: false
 
 permissions:
   contents: write
@@ -106,6 +111,14 @@ jobs:
           path: .cache/openwrt-sdk.tar
           key: ${{ runner.os }}-openwrt-sdk-${{ steps.sdk.outputs.cache_key }}
 
+      - name: Show SDK SHA-256
+        run: |
+          echo "### OpenWrt SDK SHA-256" >> "$GITHUB_STEP_SUMMARY"
+          echo '```text' >> "$GITHUB_STEP_SUMMARY"
+          sha256sum .cache/openwrt-sdk.tar | tee /tmp/sdk-sha256.txt
+          cat /tmp/sdk-sha256.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
       - name: Extract SDK
         run: |
           set -euo pipefail
@@ -119,17 +132,28 @@ jobs:
           SDK_DIR="$GITHUB_WORKSPACE/sdk"
           sh source/build.sh "$GITHUB_WORKSPACE/source" "$GITHUB_WORKSPACE/out" "$SDK_DIR"
           test -s out/mt7981_oc_hold.ko
+          mv out/mt7981_oc_hold.ko ./
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mt7981_oc_hold-${{ inputs.release && 'release' || 'build' }}
+          path: |
+            mt7981_oc_hold.ko
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Create archive
+        if: ${{ inputs.release }}
         id: archive
         run: |
           set -euo pipefail
           ARCHIVE="mt7981_oc_hold.tar.gz"
-          cp oc.sh out/oc.sh
-          tar -czf "$ARCHIVE" -C out mt7981_oc_hold.ko oc.sh
+          tar -czf "$ARCHIVE" mt7981_oc_hold.ko oc.sh
           echo "path=$ARCHIVE" >> "$GITHUB_OUTPUT"
 
       - name: Publish release
+        if: ${{ inputs.release }}
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION_LABEL: ${{ steps.sdk.outputs.label }}
